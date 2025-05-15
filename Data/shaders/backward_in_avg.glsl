@@ -10,16 +10,12 @@ layout(std430, binding = 0) buffer LayerBuffer
 
 float ActDeriv(float y)
 {
-	IN_ACT_DERIV;
+	ACT_DERIV;
 }
 
 void main()
 {
-	float outGrad = neurons[gl_GlobalInvocationID.x].grad;
-	
-	outGrad = (outGrad == 0.0) ? 
-		ActDeriv(neurons[gl_GlobalInvocationID.x].actout) : 
-		outGrad * ActDeriv(neurons[gl_GlobalInvocationID.x].actout);
+	float outGrad = neurons[gl_GlobalInvocationID.x].grad * ActDeriv(neurons[gl_GlobalInvocationID.x].actout);
 		
 	neurons[gl_GlobalInvocationID.x].grad = outGrad;
 	neurons[gl_GlobalInvocationID.x].bgrad += outGrad;

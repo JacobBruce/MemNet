@@ -43,9 +43,5 @@ void main()
 	outVal += neurons[gl_GlobalInvocationID.x].bias +
 			  (memVal * neurons[gl_GlobalInvocationID.x].mweight);
 	
-	outVal = ActFunc(outVal);
-	
-	neurons[gl_GlobalInvocationID.x].mem = BlendMem(outVal, neurons[gl_GlobalInvocationID.x].frate * memVal);
-	neurons[gl_GlobalInvocationID.x].mprev = memVal;
-	neurons[gl_GlobalInvocationID.x].actout = outVal;
+	neurons[gl_GlobalInvocationID.x].temp = ActFunc(outVal);
 }

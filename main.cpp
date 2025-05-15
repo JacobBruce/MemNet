@@ -7,6 +7,8 @@ TODO:
 - ReduceLROnPlateau (Reduce learning rate when net stops improving)
 - Learning rate scheduler (Reduce learning rate over time)
 - ModelCheckpoint (Save the model weights at periodic intervals)
+- Option to show accuracy metric during training
+- Custom source layer(s) for each layer
 - Convolutional layers
 */
 
@@ -20,7 +22,7 @@ int main(int argc, char *argv[])
     SetConsoleOutputCP(CP_UTF8);
 
     if (argc > 1) {
-        GLOBALS::DATA_FOLDER = std::string(argv[1])+"Data/";
+        GLOBALS::DATA_FOLDER = std::string(argv[1])+"data/";
     } else {
         if (argc == 0) {
             GLOBALS::DATA_FOLDER.assign(__FILE__);
@@ -29,16 +31,12 @@ int main(int argc, char *argv[])
         }
 
         size_t found = GLOBALS::DATA_FOLDER.find_last_of("/\\");
-        GLOBALS::DATA_FOLDER = GLOBALS::DATA_FOLDER.substr(0, found+1)+"Data/";
+        GLOBALS::DATA_FOLDER = GLOBALS::DATA_FOLDER.substr(0, found+1)+"data/";
     }
 
 	std::cout << "Loading config file... ";
-	if (LoadConfigFile(GLOBALS::DATA_FOLDER+CONFIG_FILE, GLOBALS::config_map)) {
-        std::cout << "Success!" << std::endl;
-	} else {
-		std::cout << "Failed!\nFile: " << GLOBALS::DATA_FOLDER << CONFIG_FILE;
-		exit(EXIT_FAILURE);
-	}
+	LoadConfigFile(GLOBALS::DATA_FOLDER+CONFIG_FILE, GLOBALS::config_map);
+    std::cout << "Success!" << std::endl;
 
     GLOBALS::WORKGROUP_SIZE = stoul(GLOBALS::config_map["WORKGROUP_SIZE"]);
 
@@ -85,59 +83,69 @@ int main(int argc, char *argv[])
     for (GLuint i=0; i < shapeVals.size(); ++i)
         netShape.push_back(stoul(shapeVals[i]));
 
-    std::string netType = GLOBALS::config_map["NET_TYPE"];
-    std::string inActFunc = GLOBALS::config_map["IN_ACT_FUNC"];
-    std::string hidActFunc = GLOBALS::config_map["HID_ACT_FUNC"];
-    std::string outActFunc = GLOBALS::config_map["OUT_ACT_FUNC"];
-    std::string memBlendFunc = GLOBALS::config_map["MEM_BLEND_FUNC"];
+    if (!DirExists(GLOBALS::config_map["NET_DIR"]))
+        HandleFatalError("no model folder found at "+GLOBALS::config_map["NET_DIR"]);
+
+    std::string netType(GLOBALS::config_map["NET_TYPE"]);
+    std::vector<std::string> actFuncs(ExplodeStr(GLOBALS::config_map["ACT_FUNCS"], ","));
+    std::vector<std::string> memLayers(ExplodeStr(GLOBALS::config_map["MEM_LAYERS"], ","));
+    std::string memBlendFunc(GLOBALS::config_map["MEM_BLEND_FUNC"]);
     GLfloat minWeight = stof(GLOBALS::config_map["MIN_WEIGHT"]);
     GLfloat maxWeight = stof(GLOBALS::config_map["MAX_WEIGHT"]);
+    GLfloat initBias = stof(GLOBALS::config_map["INIT_BIAS"]);
+    GLfloat initFrate = stof(GLOBALS::config_map["INIT_FRATE"]);
     GLuint trainEpochs = stoul(GLOBALS::config_map["TRAIN_EPOCHS"]);
     GLuint examplesPB = stoul(GLOBALS::config_map["EXAMPLES_PB"]);
     GLuint trainSteps = stoul(GLOBALS::config_map["TRAIN_STEPS"]);
     trainSteps = (trainSteps < 2 ? 1 : trainSteps);
+    float4 initData = { minWeight, maxWeight, initBias, initFrate };
+
+    Engine engine(trainSteps > 1);
 
 	if (GLOBALS::config_map["ENGINE_MODE"] == "0") { // GEN NET
 
-        Engine engine(netShape, netType, minWeight, maxWeight, inActFunc, hidActFunc, outActFunc, memBlendFunc);
+        engine.GenNet(netShape, netType, initData, actFuncs, memLayers, memBlendFunc);
 
-        engine.net.Save(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
+        engine.SaveNet(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
 
     } else if (GLOBALS::config_map["ENGINE_MODE"] == "1") { // TRAIN NET
 
-        Engine engine(trainSteps > 1);
-
         if (FileExists(GLOBALS::config_map["NET_DIR"]+GLOBALS::config_map["NET_NAME"]+".config")) {
-            engine.net.Load(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
+            engine.LoadNet(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
         } else {
-            engine.net.Generate(netShape, netType, minWeight, maxWeight, inActFunc, hidActFunc, outActFunc, memBlendFunc);
+            HandleFatalError("no net named "+GLOBALS::config_map["NET_NAME"]+" could be found");
         }
 
-        engine.Init();
-
-        engine.LoadDataBatches(
+        engine.LoadDataset(
             GLOBALS::config_map["TRAIN_DATA"], GLOBALS::config_map["DATA_TYPE"],
             GLOBALS::config_map["INPUT_FUNC"], GLOBALS::config_map["OUTPUT_FUNC"],
             examplesPB
         );
 
-        std::cout << "Training ..." << std::endl;
-
-        /*if (StrToUpper(GLOBALS::config_map["NET_TYPE"]) == "WORD2VEC") {
-            engine.TrainWord2VecNet(trainEpochs, trainSteps);
-        } else */if (StrToUpper(GLOBALS::config_map["NET_TYPE"]) == "TEXT_GEN") {
+        if (StrToUpper(netType) == "WORD_2_VEC") {
+            engine.TrainWord2Vec(trainEpochs, trainSteps);
+        } else if (StrStartsWith(netType, "AUTO_ENC")) {
+            std::cout << "Training auto-encoder ..." << std::endl;
+            if (StrToUpper(GLOBALS::config_map["INPUT_FUNC"]) == "TOKENIZE") {
+                engine.TrainTextAutoEncoder(trainEpochs, trainSteps);
+            } else {
+                engine.TrainAutoEncoder(trainEpochs, trainSteps);
+            }
+        } else if (StrToUpper(netType) == "TEXT_GEN") {
+            std::cout << "Training text model ..." << std::endl;
             engine.TrainTextNet(trainEpochs, trainSteps);
         } else {
+            std::cout << "Training model ..." << std::endl;
             engine.TrainNet(trainEpochs, trainSteps);
         }
 
-        engine.net.Save(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
+        engine.SaveNet(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
 
     } else if (GLOBALS::config_map["ENGINE_MODE"] == "2") { // TEST NET
 
-        Engine engine(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
+        engine.LoadNet(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
 
-        engine.LoadDataBatches(
+        engine.LoadDataset(
             GLOBALS::config_map["TEST_DATA"], GLOBALS::config_map["DATA_TYPE"],
             GLOBALS::config_map["INPUT_FUNC"], GLOBALS::config_map["OUTPUT_FUNC"],
             examplesPB
@@ -146,7 +154,10 @@ int main(int argc, char *argv[])
         engine.TestNet();
 
     } else { // RUN NET
-        //TODO:
+
+        engine.LoadNet(GLOBALS::config_map["NET_DIR"], GLOBALS::config_map["NET_NAME"]);
+
+        engine.RunNet();
     }
 
 	std::cout << std::endl << "Stopping engine ..." << std::endl;

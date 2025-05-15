@@ -9,11 +9,21 @@
 
 namespace Worderizer {
 
+    struct SubCharData
+    {
+        std::u32string sub;
+        bool use;
+
+        SubCharData() : use(false) {};
+    };
+
     inline uint32_t MinOccurr = 2;
     inline uint8_t MaxRepLen = 6;
     inline uint8_t MaxNumLen = 4;
     inline uint8_t MaxWordLen = 64;
     inline uint32_t MaxCharCode = 65536;
+
+    inline std::vector<SubCharData> charSubTable;
 
     inline std::wstring_convert<std::codecvt_utf8<char32_t>,char32_t> cv_u8_u32;
     //std::wstring_convert<std::codecvt_utf16<char32_t>,char32_t> cv_u16_u32;
@@ -39,6 +49,50 @@ namespace Worderizer {
     inline std::u32string U8ToU32(const std::string& str)
     {
         return cv_u8_u32.from_bytes(str);
+    }
+
+    inline void LoadSubChars(const std::string char_file)
+    {
+        std::unordered_map<std::string,std::string> charMap;
+
+        LoadConfigFile(char_file, charMap);
+
+        charSubTable.reserve(charMap.size());
+
+        for (const auto& n : charMap)
+        {
+            uint32_t c = stoul(n.first);
+
+            if (c >= charSubTable.size())
+                charSubTable.resize(c+1);
+
+            charSubTable[c].sub = U8ToU32(n.second);
+            charSubTable[c].use = true;
+        }
+    }
+
+    inline bool IsInSubTable(uint32_t c)
+    {
+        if (c >= charSubTable.size()) return false;
+
+        return charSubTable[c].use;
+    }
+
+    inline std::u32string NormalizeChars(const std::u32string& str)
+    {
+        std::u32string result;
+        result.reserve(str.size());
+
+        for (const char32_t& c : str)
+        {
+            if (IsInSubTable(c)) {
+                result += charSubTable[c].sub;
+            } else {
+                result.push_back(c);
+            }
+        }
+
+        return result;
     }
 
     inline bool IsAlpha(const uint32_t& c)
@@ -469,9 +523,11 @@ namespace Worderizer {
 
         if (str.empty()) return false;
 
-        for (size_t c=0; c < str.length(); ++c)
+        std::u32string normStr(NormalizeChars(str));
+
+        for (size_t c=0; c < normStr.length(); ++c)
         {
-            tempChar = str[c];
+            tempChar = normStr[c];
 
             while(true)
             {
@@ -480,10 +536,10 @@ namespace Worderizer {
                     isFirstChar = true;
                     foundToken = true;
 
-                    if (!nextChar && word.length() == 1 && c < str.length()-1) {
+                    if (!nextChar && word.length() == 1 && c < normStr.length()-1) {
 
                         tempStr = word;
-                        tempStr.push_back(str[c+1]);
+                        tempStr.push_back(normStr[c+1]);
 
                         if (words.contains(tempStr)) {
                             dest.push_back(words[tempStr]);

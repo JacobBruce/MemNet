@@ -1,38 +1,38 @@
 #pragma once
 #include <random>
-#include "OpenGL.h"
+#include "Resource.h"
 #include "Worderizer.h"
 
-inline const uint32_t NET_VERSION = 1;
+inline const uint32_t NET_VERSION = 2;
 
 #pragma pack(push,1)
 
 struct Neuron // 48 bytes
 {
-	GLfloat bias; // bias weight
-	GLfloat bgrad; // bias gradient
-	GLfloat mweight; // mem weight
-	GLfloat mgrad; // mem gradient
-	GLfloat mprev; // previous mem
-	GLfloat mem; // memory cell
-	GLfloat frate; // forget rate
-	GLfloat param; // unused
-	GLfloat temp; // used as cache
-	GLfloat grad; // error gradient
-	GLfloat insum; // input sum
-	GLfloat actout; // output val
+	float bias; // bias weight
+	float bgrad; // bias gradient
+	float mweight; // mem weight
+	float mgrad; // mem gradient
+	float mprev; // previous mem
+	float mem; // memory cell
+	float frate; // forget rate
+	float param; // unused
+	float temp; // used as cache
+	float grad; // error gradient
+	float insum; // input sum
+	float actout; // output val
 
 	Neuron(){}
 
-	Neuron(GLfloat mem_weight)
+	Neuron(const float& mem_weight, const float& init_bias, const float& init_frate)
 	{
-        bias = 1.0f;
+        bias = init_bias;
         bgrad = 0.0f;
         mweight = mem_weight;
         mgrad = 0.0f;
         mprev = 0.0f;
         mem = 0.0f;
-        frate = 0.5f;
+        frate = init_frate;
         param = 0.0f;
         temp = 0.0f;
         grad = 0.0f;
@@ -53,19 +53,11 @@ public:
         Load(net_dir, net_name);
 	}
 
-	MemNet(const std::vector<GLuint>& net_shape, std::string net_type, GLfloat min_weight, GLfloat max_weight,
-           std::string in_act_func, std::string hid_act_func, std::string out_act_func, std::string mem_blend_func)
+	MemNet(const std::vector<uint32_t>& net_shape, std::string net_type, float4 init_data,
+           std::vector<std::string>& act_funcs, std::vector<std::string>& mem_layers, std::string mem_blend_func)
 	{
-	    Generate(net_shape, net_type, min_weight, max_weight, in_act_func, hid_act_func, out_act_func, mem_blend_func);
+	    Generate(net_shape, net_type, init_data, act_funcs, mem_layers, mem_blend_func);
 	}
-
-	/*void ConfigLearning(GLfloat learn_rate, GLfloat momentum_strength, GLuint train_steps)
-	{
-	    learnRate = learn_rate;
-	    momentum = momentum_strength;
-	    trainSteps = train_steps;
-	    gradDiv = train_steps > 0 ? 1.0f / train_steps : 1.0f;
-	}*/
 
 	void CountWeights()
 	{
@@ -90,7 +82,7 @@ public:
 	    neuronOffsets[0] = 0;
 	    maxLayerSize = shape[0];
 
-	    for (GLuint i=1; i < shape.size(); ++i)
+	    for (uint32_t i=1; i < shape.size(); ++i)
         {
             offset += shape[i-1];
             neuronOffsets[i] = offset;
@@ -102,88 +94,158 @@ public:
 	    weightOffsets[0] = 0;
 	    weightOffsets[1] = 0;
 
-	    for (GLuint i=2; i < shape.size(); ++i)
+	    for (uint32_t i=2; i < shape.size(); ++i)
         {
             weightOffsets[i] = offset;
             offset += shape[i-1] * shape[i];
         }
 	}
 
-    void ApplyFuncStrings()
-    {
-        std::string* funcStr;
-        std::string* derivStr;
-        std::string* actFunc;
-
-        if (GLOBALS::config_map["LOSS_FUNC"] == "CROSS_ENTROPY") {
-            //GLOBALS::config_map["LOSS_F"] = "-a * log(max(b,3.4e-38))";
-            //GLOBALS::config_map["LOSS_D"] = "-a / max(b,3.4e-38)";
-            GLOBALS::config_map["LOSS_F"] = "b > 0 ? -a * log(b) : a";
-            GLOBALS::config_map["LOSS_D"] = "b > 0 ? -a / b : sign(a)";
-        } else if (GLOBALS::config_map["LOSS_FUNC"] == "MAE") {
-            GLOBALS::config_map["LOSS_F"] = "abs(a - b)";
-            GLOBALS::config_map["LOSS_D"] = "sign(a - b)";
-        } else { //MSE
-            GLOBALS::config_map["LOSS_F"] = "pow(a - b, 2.0)";
-            GLOBALS::config_map["LOSS_D"] = "(a - b) * 2.0";
+	void SetOutputDims()
+	{
+        if (netType == "WORD_2_VEC") {
+            outLayerSpan = InputSize();
+            outLayerRows = 2;
+        } else if (GLOBALS::config_map.find("OUTPUT_SPAN") != GLOBALS::config_map.end()) {
+            outLayerSpan = stoul(GLOBALS::config_map["OUTPUT_SPAN"]);
+            outLayerRows = stoul(GLOBALS::config_map["OUTPUT_ROWS"]);
+        } else {
+            outLayerSpan = OutputSize();
+            outLayerRows = 1;
         }
 
-        GLOBALS::config_map["IN_ACT_F"] = "";
-        GLOBALS::config_map["HID_ACT_F"] = "";
-        GLOBALS::config_map["OUT_ACT_F"] = "";
-        GLOBALS::config_map["IN_ACT_D"] = "";
-        GLOBALS::config_map["HID_ACT_D"] = "";
-        GLOBALS::config_map["OUT_ACT_D"] = "";
+        if (OutputSize() != outLayerSpan * outLayerRows)
+            HandleFatalError("output dimensions (span*rows) does not match size of output layer");
+	}
 
-        for (int i=0; i < 3; ++i)
-        {
-            if (i == 0) {
-                funcStr = &GLOBALS::config_map["IN_ACT_F"];
-                derivStr = &GLOBALS::config_map["IN_ACT_D"];
-                actFunc = &inActFunc;
-            } else if (i == 1) {
-                funcStr = &GLOBALS::config_map["HID_ACT_F"];
-                derivStr = &GLOBALS::config_map["HID_ACT_D"];
-                actFunc = &hidActFunc;
-            } else {
-                funcStr = &GLOBALS::config_map["OUT_ACT_F"];
-                derivStr = &GLOBALS::config_map["OUT_ACT_D"];
-                actFunc = &outActFunc;
+    void ApplyLossFunc()
+    {
+        bool useLogits = StrIsTrue(GLOBALS::config_map["USE_LOGITS"]);
+
+        if (StrEndsWith(GLOBALS::config_map["LOSS_FUNC"], "CROSS_ENTROPY")) {
+
+            if (GLOBALS::config_map["LOSS_FUNC"] == "BIN_CROSS_ENTROPY") {
+
+                if (useLogits && (actFuncs.back() == "LOGISTIC" || actFuncs.back() == "SIGMOID")) {
+                    GLOBALS::config_map["LOSS_F"] = "temp = neurons[gl_GlobalInvocationID.x].insum;\n";
+                    GLOBALS::config_map["LOSS_F"] += "return (max(temp, 0.0) - temp * b) + log(1.0 + exp(-abs(temp)))";
+                    GLOBALS::config_map["LOSS_D"] = "return temp <= 0.0 ? (temp / (temp+1.0)) - b : (-1.0 / (temp+1.0)) - b+1.0";
+                } else {
+                    GLOBALS::config_map["LOSS_F"] = "temp = min(max(a, 1e-7), 0.9999999);\n";
+                    GLOBALS::config_map["LOSS_F"] += "return -((b * log(temp)) + (1.0 - b) * log(1.0 - temp))";
+                    GLOBALS::config_map["LOSS_D"] = "return -((b - temp) / (temp * (1.0 - temp)))";
+                }
+
+            } else if (GLOBALS::config_map["LOSS_FUNC"] == "CAT_CROSS_ENTROPY") {
+
+                if (actFuncs.back() != "SOFTMAX")
+                    HandleFatalError("categorical cross entropy requires a softmax output layer");
+
+                if (!useLogits) HandleFatalError("categorical cross entropy must use logits");
+
+                GLOBALS::config_map["LOSS_F"] = "return -b * log(min(max(a, 1e-7), 0.9999999))";
+                GLOBALS::config_map["LOSS_D"] = "return neurons[gl_GlobalInvocationID.x].insum - b";
+
+            } else if (GLOBALS::config_map["LOSS_FUNC"] == "WEIGHTED_CROSS_ENTROPY") {
+
+                if (actFuncs.back() != "LOGISTIC" && actFuncs.back() != "SIGMOID")
+                    HandleFatalError("weighted cross entropy requires a sigmoid/logistic output layer");
+
+                if (!useLogits) HandleFatalError("weighted cross entropy must use logits");
+
+                GLOBALS::config_map["LOSS_F"] = "temp = min(max(neurons[gl_GlobalInvocationID.x].insum, -88.72), 88.72);\n";
+                GLOBALS::config_map["LOSS_F"] += "return (1.0 - b) * temp + (1.0 + (POS_WEIGHT - 1.0) * b) ";
+                GLOBALS::config_map["LOSS_F"] += "* (log(1.0 + exp(-abs(temp))) + max(-temp, 0.0))";
+                GLOBALS::config_map["LOSS_D"] = "return temp != 0.0 ? ((1.0-b) * exp(temp) - (b * POS_WEIGHT)) ";
+                GLOBALS::config_map["LOSS_D"] += "/ (exp(temp) + 1.0) : -b * (1.0-POS_WEIGHT)";
+
+            /*} else if (GLOBALS::config_map["LOSS_FUNC"] == "MULTI_WEIGHTED_CROSS_ENTROPY") {
+
+                if (actFuncs.back() != "LOGISTIC" && actFuncs.back() != "SIGMOID")
+                    HandleFatalError("weighted cross entropy requires a sigmoid/logistic output layer");
+
+                if (!useLogits) HandleFatalError("weighted cross entropy must use logits");
+
+                GLOBALS::config_map["LOSS_F"] = "temp = neurons[gl_GlobalInvocationID.x].insum;\n";
+                GLOBALS::config_map["LOSS_F"] += "return -b * log(min(max(a, 1e-7), 0.9999999))";
+                GLOBALS::config_map["LOSS_D"] = "return -((POS_WEIGHT * b * log(temp+1e-7)) + ";
+                GLOBALS::config_map["LOSS_D"] += "(NEG_WEIGHT * (1.0 - b) * log(1.0-temp + 1e-7)))";*/
             }
 
-            if (*actFunc == "GAUSSIAN") {
-                *funcStr = "return exp(-(x*x*0.5))";
-                *derivStr = "return -y * y";
-            } else if (*actFunc == "LOGISTIC") {
-                *funcStr = "return 1.0 / (1.0+exp(-x))";
-                *derivStr = "return y * (1.0 - y)";
-            } else if (*actFunc == "SWISH") {
-                *funcStr = "float a = 1.0 / (1.0+exp(-2.0*x));\n";
-                *funcStr += "neurons[gl_GlobalInvocationID.x].temp = a;\n";
-                *funcStr += "return x * a";
-                *derivStr = "float a = neurons[gl_GlobalInvocationID.x].temp;\n";
-                *derivStr += "return a + y * (1.0 - a)";
-            } else if (*actFunc == "GELU") {
-                *funcStr = "float a = 0.5 * (1.0 + tanh(0.7978845608028654*(x+pow(0.044715*x,3.0))));\n";
-                *funcStr += "neurons[gl_GlobalInvocationID.x].temp = a;\n";
-                *funcStr += "return x * a";
-                *derivStr = "float x = neurons[gl_GlobalInvocationID.x].insum;\n";
-                *derivStr += "return neurons[gl_GlobalInvocationID.x].temp + ";
-                *derivStr += "(x * 0.3989422804014327 * exp(pow(x,2.0)*-0.5))";
-            } else if (*actFunc == "TANH") {
-                *funcStr = "return tanh(x)";
-                *derivStr = "return 1.0 - (y * y)";
-            } else {
-                *funcStr = "return x";
-                *derivStr = "return 1.0";
+        } else if (GLOBALS::config_map["LOSS_FUNC"] == "BIN_FOCAL_LOSS") {
+
+            if (useLogits) HandleFatalError("cannot use logits with binary focal loss");
+
+            GLOBALS::config_map["LOSS_F"] = "temp = max((b*a) + (1.0-b) * (1.0-a), 1e-7);\n";
+            GLOBALS::config_map["LOSS_F"] += "return -((b*ALPHA) + ((1.0-b) * (1.0-ALPHA))) ";
+            GLOBALS::config_map["LOSS_F"] += "* pow(1.0-temp, GAMMA) * log(temp)";
+            GLOBALS::config_map["LOSS_D"] = "return b * pow(1.0 - temp, GAMMA) * ";
+            GLOBALS::config_map["LOSS_D"] += "(GAMMA * temp * log(temp) + temp - 1.0)";
+
+        } else {
+
+            if (useLogits) HandleFatalError("cannot use logits with MAE or MSE loss functions");
+
+            if (GLOBALS::config_map["LOSS_FUNC"] == "MAE") {
+                GLOBALS::config_map["LOSS_F"] = "return abs(a - b)";
+                GLOBALS::config_map["LOSS_D"] = "return sign(a - b)";
+            } else { //MSE
+                GLOBALS::config_map["LOSS_F"] = "return pow(a - b, 2.0)";
+                GLOBALS::config_map["LOSS_D"] = "return (a - b) * 2.0";
             }
         }
     }
 
-	void Generate(const std::vector<GLuint>& net_shape, std::string net_type, GLfloat min_weight, GLfloat max_weight,
-                  std::string in_act_func, std::string hid_act_func, std::string out_act_func, std::string mem_blend_func)
+    static void ApplyActFunc(std::string act_func)
+    {
+        std::string& funcStr(GLOBALS::config_map["ACT_F"]);
+        std::string& derivStr(GLOBALS::config_map["ACT_D"]);
+        std::string& derivOutStr(GLOBALS::config_map["ACT_D_OUT"]);
+
+        if (act_func == "GAUSSIAN") {
+            funcStr = "return exp(-(x*x*0.5))";
+            derivStr = "return -y * exp(-0.5*y*y)";
+        } else if (act_func == "SOFTMAX") {
+            funcStr = "return exp(min(x, 88.72))"; // divided by sum later
+            derivStr = "return 1.0"; // combined with loss function deriv
+        } else if (act_func == "LOGISTIC" || act_func == "SIGMOID") {
+            funcStr = "return 1.0 / (1.0+exp(-max(x, -88.72)))";
+            derivStr = "return y * (1.0 - y)";
+        } else if (act_func == "SWISH") {
+            funcStr = "float a = 1.0 / (1.0+exp(-2.0*x));\n";
+            funcStr += "neurons[gl_GlobalInvocationID.x].temp = a;\n";
+            funcStr += "return x * a";
+            derivStr = "float a = neurons[gl_GlobalInvocationID.x].temp;\n";
+            derivStr += "return a + y * (1.0 - a)";
+        } else if (act_func == "GELU") {
+            funcStr = "float a = 0.5 * (1.0 + tanh(0.7978845608028654*(x+pow(0.044715*x,3.0))));\n";
+            funcStr += "neurons[gl_GlobalInvocationID.x].temp = a;\n";
+            funcStr += "return x * a";
+            derivStr = "float x = neurons[gl_GlobalInvocationID.x].insum;\n";
+            derivStr += "return neurons[gl_GlobalInvocationID.x].temp + ";
+            derivStr += "(x * 0.3989422804014327 * exp(pow(x,2.0)*-0.5))";
+        } else if (act_func == "TANH") {
+            funcStr = "return tanh(x)";
+            derivStr = "return 1.0 - (y * y)";
+        } else {
+            funcStr = "return x";
+            derivStr = "return 1.0";
+        }
+
+        if (StrIsTrue(GLOBALS::config_map["USE_LOGITS"])) {
+            derivOutStr = "return 1.0";
+        } else {
+            derivOutStr = derivStr;
+        }
+    }
+
+	void Generate(const std::vector<uint32_t>& net_shape, std::string net_type, float4 init_data,
+                  const std::vector<std::string>& act_funcs, std::vector<std::string>& mem_layers, std::string mem_blend_func)
 	{
         std::cout << "Generating new net ..." << std::endl;
+
+        if (net_shape.size() != act_funcs.size())
+            HandleFatalError("number of activation functions does not match number of layers in net");
 
 	    uint64_t weightsPerNeuron = net_shape[0];
 	    uint64_t neuronCount = net_shape[0];
@@ -191,15 +253,33 @@ public:
 
 	    version = NET_VERSION;
 	    netType = net_type;
-        inActFunc = in_act_func;
-        hidActFunc = hid_act_func;
-        outActFunc = out_act_func;
+        actFuncs = act_funcs;
         memBlendFunc = mem_blend_func;
+
+        memBlendBools.resize(net_shape.size());
+        softmaxBools.resize(net_shape.size());
+
+        for (uint32_t i=0; i < net_shape.size(); ++i)
+        {
+            if (StrIsFalse(mem_layers[i])) {
+                memBlendBools[i] = false;
+            } else {
+                memBlendBools[i] = true;
+            }
+
+            if (actFuncs[i] == "SOFTMAX") {
+                if (i != net_shape.size()-1)
+                    HandleFatalError("softmax can only be used on output layer");
+                softmaxBools[i] = true;
+            } else {
+                softmaxBools[i] = false;
+            }
+        }
 
 	    shape.resize(net_shape.size());
 	    shape[0] = net_shape[0];
 
-        for (GLuint i=1; i < net_shape.size(); ++i)
+        for (uint32_t i=1; i < net_shape.size(); ++i)
         {
             shape[i] = net_shape[i];
             neuronCount += net_shape[i];
@@ -210,31 +290,32 @@ public:
         weightsPerNeuron = net_shape[0];
         neurons.reserve(neuronCount);
         weights.reserve(weightCount);
-        gradients.assign(weightCount, 0.0);
+        gradients.assign(weightCount, 0.f);
 
         std::random_device dev;
         std::mt19937 rng(dev());
-        std::uniform_real_distribution<float> randWeight(min_weight, max_weight);
+        std::uniform_real_distribution<float> randWeight(init_data.x, init_data.y);
 
-        for (GLuint n=0; n < net_shape[0]; ++n)
-            neurons.emplace_back(randWeight(rng));
+        for (uint32_t n=0; n < net_shape[0]; ++n)
+            neurons.emplace_back(randWeight(rng), init_data.z, init_data.w);
 
-        for (GLuint i=1; i < net_shape.size(); ++i)
+        for (uint32_t i=1; i < net_shape.size(); ++i)
         {
-            for (GLuint n=0; n < net_shape[i]; ++n)
+            for (uint32_t n=0; n < net_shape[i]; ++n)
             {
-                neurons.emplace_back(randWeight(rng));
+                neurons.emplace_back(randWeight(rng), init_data.z, init_data.w);
 
                 for (uint64_t w=0; w < weightsPerNeuron; ++w)
-                    weights.push_back(randWeight(rng));
+                    weights.emplace_back(randWeight(rng));
             }
 
             weightsPerNeuron = net_shape[i];
         }
 
         CalcOffsets();
+        SetOutputDims();
         CountWeights();
-        ApplyFuncStrings();
+        ApplyLossFunc();
 	}
 
 	void Load(std::string& dir, std::string& name)
@@ -242,15 +323,36 @@ public:
 	    std::string fileName(dir+name+".config");
 	    std::unordered_map<std::string,std::string> netConfig;
 
-	    if (!LoadConfigFile(fileName, netConfig))
-            HandleFatalError("failed to open "+fileName);
+	    LoadConfigFile(fileName, netConfig);
 
         version = stoul(netConfig["version"]);
+
+        if (version != NET_VERSION)
+            HandleFatalError("can't load net made for different version of MemNet");
+
         netType = netConfig["netType"];
-        inActFunc = netConfig["inActFunc"];
-        hidActFunc = netConfig["hidActFunc"];
-        outActFunc = netConfig["outActFunc"];
         memBlendFunc = netConfig["memBlendFunc"];
+
+        SplitStr(netConfig["actFuncs"], ",", actFuncs);
+
+        std::vector<std::string> strParts;
+        SplitStr(netConfig["memLayers"], ",", strParts);
+        memBlendBools.resize(strParts.size());
+        softmaxBools.resize(actFuncs.size());
+
+        if (strParts.size() != actFuncs.size())
+            HandleFatalError("net config file is corrupted!");
+
+        for (uint32_t i=0; i < strParts.size(); ++i)
+        {
+            if (StrIsFalse(strParts[i])) {
+                memBlendBools[i] = false;
+            } else {
+                memBlendBools[i] = true;
+            }
+
+            softmaxBools[i] = (actFuncs[i] == "SOFTMAX");
+        }
 
         GLOBALS::config_map["NET_TYPE"] = netType;
         GLOBALS::config_map["MEM_BLEND_FUNC"] = memBlendFunc;
@@ -259,12 +361,15 @@ public:
         shape.resize(shapeVals.size());
         std::cout << "Loading net with shape:";
 
-        for (GLuint i=0; i < shapeVals.size(); ++i)
+        for (uint32_t i=0; i < shapeVals.size(); ++i)
         {
             shape[i] = stoul(shapeVals[i]);
             std::cout << " " << shapeVals[i];
         }
         std::cout << std::endl;
+
+        outLayerSpan = stoul(netConfig["outputSpan"]);
+        outLayerRows = shape.back() / outLayerSpan;
 
 	    fileName = dir+name+".neurons";
         FILE* pFile = fopen(fileName.c_str(), "rb");
@@ -277,19 +382,25 @@ public:
         pFile = fopen(fileName.c_str(), "rb");
         if (pFile == NULL) HandleFatalError("failed to open "+fileName);
         weights.resize(stoul(netConfig["weights"]));
-        fread(weights.data(), sizeof(GLfloat), weights.size(), pFile);
+        fread(weights.data(), sizeof(float), weights.size(), pFile);
         fclose(pFile);
 
 	    fileName = dir+name+".grads";
-        pFile = fopen(fileName.c_str(), "rb");
-        if (pFile == NULL) HandleFatalError("failed to open "+fileName);
-        gradients.resize(stoul(netConfig["weights"]));
-        fread(gradients.data(), sizeof(GLfloat), gradients.size(), pFile);
-        fclose(pFile);
+
+	    if (FileExists(fileName)) {
+            pFile = fopen(fileName.c_str(), "rb");
+            if (pFile == NULL) HandleFatalError("failed to open "+fileName);
+            gradients.resize(stoul(netConfig["weights"]));
+            fread(gradients.data(), sizeof(float), gradients.size(), pFile);
+            fclose(pFile);
+	    } else if (GLOBALS::config_map["ENGINE_MODE"] == "1") {
+            std::cout << "WARNING: model has no gradient checkpoint file" << std::endl;
+            gradients.assign(stoul(netConfig["weights"]), 0.f);
+	    }
 
         CalcOffsets();
         CountWeights();
-        ApplyFuncStrings();
+        ApplyLossFunc();
 	}
 
 	void Save(std::string& dir, std::string& name)
@@ -305,27 +416,51 @@ public:
         fileName = dir+name+".weights";
         pFile = fopen(fileName.c_str(), "wb");
         if (pFile == NULL) HandleFatalError("failed to create "+fileName);
-        fwrite(weights.data(), sizeof(GLfloat), weights.size(), pFile);
+        fwrite(weights.data(), sizeof(float), weights.size(), pFile);
         fclose(pFile);
 
-        fileName = dir+name+".grads";
-        pFile = fopen(fileName.c_str(), "wb");
-        if (pFile == NULL) HandleFatalError("failed to create "+fileName);
-        fwrite(gradients.data(), sizeof(GLfloat), gradients.size(), pFile);
-        fclose(pFile);
+        if (!gradients.empty()) {
+            fileName = dir+name+".grads";
+            pFile = fopen(fileName.c_str(), "wb");
+            if (pFile == NULL) HandleFatalError("failed to create "+fileName);
+            fwrite(gradients.data(), sizeof(float), gradients.size(), pFile);
+            fclose(pFile);
+        }
 
         std::stringstream configSS;
         configSS << "version=" << version << "\n";
         configSS << "neurons=" << neurons.size() << "\n";
         configSS << "weights=" << weights.size() << "\n";
         configSS << "netType=" << netType << "\n";
-        configSS << "inActFunc=" << inActFunc << "\n";
-        configSS << "hidActFunc=" << hidActFunc << "\n";
-        configSS << "outActFunc=" << outActFunc << "\n";
+        configSS << "outputSpan=" << outLayerSpan << "\n";
         configSS << "memBlendFunc=" << memBlendFunc << "\n";
+        configSS << "memLayers=";
+
+        for (uint32_t i=0; i < memBlendBools.size(); ++i)
+        {
+            configSS << memBlendBools[i];
+            if (i < memBlendBools.size()-1) {
+                configSS << ",";
+            } else {
+                configSS << "\n";
+            }
+        }
+
+        configSS << "actFuncs=";
+
+        for (uint32_t i=0; i < actFuncs.size(); ++i)
+        {
+            configSS << actFuncs[i];
+            if (i < actFuncs.size()-1) {
+                configSS << ",";
+            } else {
+                configSS << "\n";
+            }
+        }
+
         configSS << "shape=";
 
-        for (GLuint i=0; i < shape.size(); ++i)
+        for (uint32_t i=0; i < shape.size(); ++i)
         {
             configSS << shape[i];
             if (i < shape.size()-1) {
@@ -342,7 +477,7 @@ public:
         configFile.close();
 	}
 
-	const std::vector<GLuint>& Shape()
+	const std::vector<uint32_t>& Shape()
 	{
 	    return shape;
 	}
@@ -352,114 +487,129 @@ public:
         return neurons;
 	}
 
-	const std::vector<GLfloat>& Weights() const
+	const std::vector<float>& Weights() const
 	{
         return weights;
 	}
 
-	const std::vector<GLfloat>& Gradients() const
+	const std::vector<float>& Gradients() const
 	{
         return gradients;
 	}
 
-    Neuron* LayerNeurons(GLuint layer_index)
+    Neuron* LayerNeurons(uint32_t layer_index)
 	{
         return &neurons[NeuronOffset(layer_index)];
 	}
 
-    GLfloat* LayerWeights(GLuint layer_index)
+	Neuron* InputNeurons()
+	{
+        return LayerNeurons(0);
+    }
+
+	Neuron* OutputNeurons()
+	{
+        return LayerNeurons(LayerCount()-1);
+    }
+
+    float* LayerWeights(uint32_t layer_index)
 	{
         return &weights[WeightOffset(layer_index)];
 	}
 
-    GLfloat* LayerGradients(GLuint layer_index)
+    float* LayerGradients(uint32_t layer_index)
 	{
         return &gradients[WeightOffset(layer_index)];
 	}
 
-	GLuint MaxLayerSize() const
+	const uint32_t& MaxLayerSize() const
 	{
 	    return maxLayerSize;
 	}
 
-	GLuint LayerSize(GLuint layer_index) const
+	const uint32_t& LayerSize(uint32_t layer_index) const
 	{
 	    return shape[layer_index];
 	}
 
-	GLuint LayerCount() const
+	uint32_t LayerCount() const
 	{
 	    return shape.size();
 	}
 
-	GLuint HiddenLayerCount() const
+	uint32_t HiddenLayerCount() const
 	{
 	    return shape.size() - 2;
 	}
 
-	GLuint WeightCount(GLuint layer_index) const
+	const uint32_t& WeightCount(uint32_t layer_index) const
 	{
 	    return weightCounts[layer_index];
 	}
 
-	GLuint InputSize() const
+	const uint32_t& InputSize() const
 	{
 	    return shape[0];
 	}
 
-	GLuint OutputSize() const
+	const uint32_t& OutputSize() const
 	{
 	    return shape[shape.size()-1];
 	}
 
-	GLuint OutputOffset() const
+	uint32_t OutputOffset() const
 	{
         return neurons.size() - OutputSize();
     }
 
-    uint64_t NeuronOffset(GLuint layer_index) const
+	const uint32_t& OutputSpan() const
+	{
+        return outLayerSpan;
+    }
+
+	const uint32_t& OutputRows() const
+	{
+        return outLayerRows;
+    }
+
+    const uint64_t& NeuronOffset(uint32_t layer_index) const
     {
         return neuronOffsets[layer_index];
     }
 
-    uint64_t WeightOffset(GLuint layer_index) const
+    const uint64_t& WeightOffset(uint32_t layer_index) const
     {
         return weightOffsets[layer_index];
     }
 
-    /*const GLfloat& LearnRate() const
+    bool LayerUsesSoftMax(uint32_t layer_index) const
     {
-        return learnRate;
+        return softmaxBools[layer_index];
     }
 
-    const GLfloat& Momentum() const
+    bool LayerHasMem(uint32_t layer_index) const
     {
-        return momentum;
+        return memBlendBools[layer_index];
     }
-
-    const GLuint& TrainSteps() const
-    {
-        return trainSteps;
-    }*/
 
     const std::string& MemBlendFunc() const
     {
         return memBlendFunc;
     }
 
-    const std::string& InputActFunc() const
+    const std::string& LayerActFunc(uint32_t layer_index) const
     {
-        return inActFunc;
+        return actFuncs[layer_index];
     }
 
-    const std::string& HiddenActFunc() const
+    const std::vector<std::string>& ActivationFuncs() const
     {
-        return hidActFunc;
+        return actFuncs;
     }
 
     const std::string& OutputActFunc() const
     {
-        return outActFunc;
+        return actFuncs.back();
     }
 
     const std::string& NetType() const
@@ -467,30 +617,27 @@ public:
         return netType;
     }
 
-    const GLuint& NetVersion() const
+    const uint32_t& NetVersion() const
     {
         return version;
     }
 
 private:
-    GLuint version;
-    GLuint maxLayerSize;
-    //GLuint trainSteps;
-	//GLfloat learnRate;
-    //GLfloat momentum;
-    //GLfloat gradDiv;
+    uint32_t version;
+    uint32_t maxLayerSize;
+    uint32_t outLayerSpan;
+    uint32_t outLayerRows;
 
     std::string netType;
-    std::string inActFunc;
-    std::string hidActFunc;
-    std::string outActFunc;
     std::string memBlendFunc;
-
+    std::vector<bool> memBlendBools;
+    std::vector<bool> softmaxBools;
+    std::vector<std::string> actFuncs;
     std::vector<Neuron> neurons;
-    std::vector<GLfloat> weights;
-    std::vector<GLfloat> gradients;
-    std::vector<GLuint> shape;
-    std::vector<GLuint> weightCounts;
+    std::vector<float> weights;
+    std::vector<float> gradients;
+    std::vector<uint32_t> shape;
+    std::vector<uint32_t> weightCounts;
     std::vector<uint64_t> neuronOffsets;
     std::vector<uint64_t> weightOffsets;
 };

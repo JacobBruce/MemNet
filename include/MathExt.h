@@ -65,19 +65,14 @@ inline void SwapVars(T& x1, T& x2)
 	x2 = temp;
 }
 
-template <typename T>
-inline T Clamp(const T& n, const T& lower, const T& upper) {
-  return std::max(lower, std::min(n, upper));
+inline float Lerp(const float& x, const float& edge0, const float& edge1)
+{
+    return edge0 + (x * (edge1 - edge0));
 }
 
-inline float SmoothStep(float edge0, float edge1, float x) {
-    x = Clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-    return x * x * (3.0f - 2.0f * x);
-}
-
-inline double SmoothStep(double edge0, double edge1, double x) {
-    x = Clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
-    return x * x * (3.0 - 2.0 * x);
+inline float SmoothStep(float x, const float& edge0, const float& edge1) {
+    x = std::clamp((x - edge0) / (edge1 - edge0), 0.f, 1.f);
+    return x * x * (3.f - 2.f * x);
 }
 
 inline uint32_t Index3Dto1D(const uint3& index, const uint32_t& span)

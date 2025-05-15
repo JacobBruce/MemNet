@@ -21,7 +21,7 @@ float BlendMem(float a, float b)
 float ActFunc(float x)
 {
 	neurons[gl_GlobalInvocationID.x].insum = x;
-	IN_ACT_FUNC;
+	ACT_FUNC;
 }
 
 void main()

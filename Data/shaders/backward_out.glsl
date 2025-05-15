@@ -1,7 +1,14 @@
 #version 460 core
 layout (local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 
+#define POS_WEIGHT POS_WEIGHT_VAL
+#define NEG_WEIGHT NEG_WEIGHT_VAL
+#define ALPHA ALPHA_VAL
+#define GAMMA GAMMA_VAL
+
 uniform uint weightsPerNeuron;
+
+float temp;
 
 NEURON_STRUCT;
 
@@ -32,17 +39,17 @@ layout(std430, binding = 4) buffer PrevLayerBuffer
 
 float CalcError(float a, float b)
 {
-	return LOSS_FUNC;
+	LOSS_FUNC;
 }
 
 float ErrorDeriv(float a, float b)
 {
-	return LOSS_DERIV;
+	LOSS_DERIV;
 }
 
 float ActDeriv(float y)
 {
-	OUT_ACT_DERIV;
+	ACT_DERIV_OUT;
 }
 
 void main()
@@ -51,7 +58,9 @@ void main()
 	float outVal = neurons[gl_GlobalInvocationID.x].actout;
 	float target = targets[gl_GlobalInvocationID.x];
 	
-	float outGrad = ActDeriv(outVal) * ErrorDeriv(target, outVal);
+	errors[gl_GlobalInvocationID.x] += CalcError(outVal, target);
+	
+	float outGrad = ActDeriv(outVal) * ErrorDeriv(outVal, target);
 	float biasGrad = outGrad + (neurons[gl_GlobalInvocationID.x].bgrad * MOMENTUM);
 	float memGrad = (outGrad * neurons[gl_GlobalInvocationID.x].mprev) + (neurons[gl_GlobalInvocationID.x].mgrad * MOMENTUM);
 	
@@ -69,6 +78,4 @@ void main()
 	neurons[gl_GlobalInvocationID.x].bias -= LEARN_RATE_BIAS * biasGrad;
 	neurons[gl_GlobalInvocationID.x].frate -= LEARN_RATE_MEM * biasGrad;
 	neurons[gl_GlobalInvocationID.x].mweight -= LEARN_RATE * memGrad;
-	
-	errors[gl_GlobalInvocationID.x] += CalcError(target, outVal);
 }

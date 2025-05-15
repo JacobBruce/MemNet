@@ -22,13 +22,13 @@ layout(std430, binding = 2) buffer PrevLayerBuffer
 
 float ActDeriv(float y)
 {
-	HID_ACT_DERIV;
+	ACT_DERIV;
 }
 
 void main()
 {
 	uint weightIndex = gl_GlobalInvocationID.x * weightsPerNeuron;
-	float outGrad = neurons[gl_GlobalInvocationID.x].grad;
+	float outGrad = neurons[gl_GlobalInvocationID.x].grad * ActDeriv(neurons[gl_GlobalInvocationID.x].actout);
 	float biasGrad = outGrad + (neurons[gl_GlobalInvocationID.x].bgrad * MOMENTUM);
 	float memGrad = (outGrad * neurons[gl_GlobalInvocationID.x].mprev) + (neurons[gl_GlobalInvocationID.x].mgrad * MOMENTUM);
 	
@@ -38,10 +38,6 @@ void main()
 			(outGrad * otherNeurons[w].actout) + 
 			(gradients[weightIndex+w] * MOMENTUM);
 	}
-
-	outGrad = (outGrad == 0.0) ? 
-		ActDeriv(neurons[gl_GlobalInvocationID.x].actout) : 
-		outGrad * ActDeriv(neurons[gl_GlobalInvocationID.x].actout);
 		
 	neurons[gl_GlobalInvocationID.x].grad = outGrad;
 	neurons[gl_GlobalInvocationID.x].bgrad = biasGrad;

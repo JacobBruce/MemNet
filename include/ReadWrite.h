@@ -20,11 +20,14 @@
 
 inline bool DirExists(const std::string& dirname)
 {
-    struct stat st;
-    if (stat(dirname.c_str(), &st) == 0) {
-        if (S_ISDIR(st.st_mode)) { return true; }
+    struct stat info;
+    if (stat(dirname.c_str(), &info) != 0) {
+        return false;
+    } else if (info.st_mode & S_IFDIR) {
+        return true;
+    } else {
+        return false;
     }
-    return false;
 }
 
 inline bool CreateDir(const std::string& dirname)
@@ -50,22 +53,61 @@ inline void HandleFatalError(std::string emsg)
 	exit(EXIT_FAILURE);
 }
 
+inline std::vector<std::string> ListFolders(std::string dirname)
+{
+    std::vector<std::string> result;
+    for (const auto& p : std::filesystem::directory_iterator(dirname))
+        if (p.is_directory()) result.push_back(p.path().string());
+    return result;
+}
+
 inline std::vector<std::string> ListFiles(std::string dirname)
 {
     std::vector<std::string> result;
 
-    for (const auto & entry : std::filesystem::directory_iterator(dirname))
-        result.push_back(entry.path().string());
+    for (const auto& entry : std::filesystem::directory_iterator(dirname))
+        if (!entry.is_directory()) result.push_back(entry.path().string());
+
+    return result;
+}
+
+inline std::vector<std::string> ListAllFiles(std::string dirname)
+{
+    std::vector<std::string> result;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(dirname))
+        if (!entry.is_directory()) result.push_back(entry.path().string());
 
     return result;
 }
 
 inline std::string ReadFileStr(const std::string filename)
 {
-	std::ifstream sourceFile(filename);
-    std::string sourceCode(std::istreambuf_iterator<char>(sourceFile),
-                          (std::istreambuf_iterator<char>()));
-	return sourceCode;
+    std::string fileStr;
+
+	try {
+        std::ifstream sourceFile(filename);
+        fileStr.assign(std::istreambuf_iterator<char>(sourceFile),
+                              std::istreambuf_iterator<char>());
+	} catch(...) {
+        HandleFatalError("Couldn't read file: " + filename);
+	}
+
+    return fileStr;
+}
+
+inline void WriteFileStr(const std::string filename, const std::string str, bool append=false)
+{
+	std::ofstream destFile;
+	
+	if (append) {
+		destFile.open(filename, std::ios_base::app);
+	} else {
+		destFile.open(filename);
+	}
+	
+    destFile << str;
+	destFile.close();
 }
 
 inline std::vector<std::string> ReadFileLines(const std::string filename)
@@ -73,42 +115,53 @@ inline std::vector<std::string> ReadFileLines(const std::string filename)
     std::ifstream ifs(filename);
     std::vector<std::string> result;
 
-	if (ifs.is_open()) {
-		while (!ifs.eof()) {
-            std::string line;
-            std::getline(ifs, line);
-            result.push_back(line);
-		}
+	try {
+        if (ifs.is_open()) {
+            while (!ifs.eof()) {
+                std::string line;
+                std::getline(ifs, line);
+                result.push_back(line);
+            }
 
-		ifs.close();
+            ifs.close();
+        } else {
+            HandleFatalError("Couldn't open file: " + filename);
+        }
+	} catch(...) {
+        HandleFatalError("Couldn't read file: " + filename);
 	}
 
 	return result;
 }
 
-inline bool LoadConfigFile(const std::string filename, std::unordered_map<std::string,std::string>& str_map)
+inline void LoadConfigFile(std::string filename, std::unordered_map<std::string,std::string>& str_map)
 {
 	std::ifstream configFile(filename);
 	std::string line, key, data;
 	size_t bpos;
 
-	if (configFile.is_open()) {
+	try {
+        if (configFile.is_open()) {
 
-		while (!configFile.eof()) {
-			std::getline(configFile, line);
-			if (line.empty() || line[0] == '#') continue;
-			bpos = line.find("=");
-			if (bpos == std::string::npos) continue;
-			key = line.substr(0, bpos);
-			data = line.substr(bpos+1);
-			str_map[key] = data;
-		}
+            while (!configFile.eof()) {
+                std::getline(configFile, line);
+                if (line.empty() || line[0] == '#') continue;
+                bpos = line.find("=");
+                if (bpos == std::string::npos) continue;
+                key = line.substr(0, bpos);
+                data = line.substr(bpos+1);
+                str_map[key] = data;
+            }
 
-		configFile.close();
-		return true;
+            configFile.close();
+            return;
+
+        } else {
+            HandleFatalError("Couldn't open config file: " + filename);
+        }
+	} catch(...) {
+        HandleFatalError("Couldn't read config file: " + filename);
 	}
-
-	return false;
 }
 
 inline size_t CountStrInFile(const std::string& filename, const std::string& str)
@@ -117,12 +170,16 @@ inline size_t CountStrInFile(const std::string& filename, const std::string& str
 	std::string word;
 	uint32_t result = 0;
 
-    if (fileStream.is_open()) {
-        while (fileStream >> word)
-            if (word == str) result++;
-    } else {
-        HandleFatalError("Couldn't open file: " + filename);
-    }
+	try {
+        if (fileStream.is_open()) {
+            while (fileStream >> word)
+                if (word == str) result++;
+        } else {
+            HandleFatalError("Couldn't open file: " + filename);
+        }
+	} catch(...) {
+        HandleFatalError("Couldn't read file: " + filename);
+	}
 
 	return result;
 }
@@ -135,8 +192,9 @@ inline void SplitTextFile(const std::string& filename, const std::string& sep,
 	size_t startIndex = 0;
 	size_t endIndex = 0;
 
-    FILE* pFile = fopen(filename.c_str(), "rb");
-    if (pFile == NULL) HandleFatalError("failed to open "+filename);
+    FILE* pFile = nullptr;
+    errno_t err = fopen_s(&pFile, filename.c_str(), "rb");
+    if (err != 0 || pFile == nullptr) HandleFatalError("failed to open "+filename);
 
     while (fread(word.data(), 1, sep.size(), pFile) == sep.length())
     {

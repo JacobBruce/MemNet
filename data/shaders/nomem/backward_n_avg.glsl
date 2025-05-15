@@ -29,10 +29,9 @@ void main()
 {
 	uint weightIndex = gl_GlobalInvocationID.x * weightsPerNeuron;
 	float outGrad = neurons[gl_GlobalInvocationID.x].grad * ActDeriv(neurons[gl_GlobalInvocationID.x].actout);
-		
+	
 	neurons[gl_GlobalInvocationID.x].grad = outGrad;
 	neurons[gl_GlobalInvocationID.x].bgrad += outGrad;
-	neurons[gl_GlobalInvocationID.x].mgrad += outGrad * neurons[gl_GlobalInvocationID.x].mprev;
 	
 	for (uint w=0; w < weightsPerNeuron; ++w)
 		gradients[weightIndex+w] += outGrad * otherNeurons[w].actout;
